@@ -141,13 +141,10 @@ def _yarn_linear_ramp_mask(min, max, dim):
         max += 0.001  # Prevent singularity
 
     linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
-    ramp_func = torch.clamp(linear_func, 0, 1)
-    return ramp_func
+    return torch.clamp(linear_func, 0, 1)
 
 def _yarn_get_mscale(scale=1):
-    if scale <= 1:
-        return 1.0
-    return 0.07 * math.log(scale) + 1.0
+    return 1.0 if scale <= 1 else 0.07 * math.log(scale) + 1.0
 
 # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Mistral
 class MistralRMSNorm(nn.Module):
@@ -721,8 +718,8 @@ class MistralFlashAttention2(MistralAttention):
             cu_seqlens_q, cu_seqlens_k = cu_seq_lens
             max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
 
-            if not use_sliding_windows:
-                attn_output_unpad = flash_attn_varlen_func(
+            attn_output_unpad = (
+                flash_attn_varlen_func(
                     query_states,
                     key_states,
                     value_states,
@@ -734,8 +731,8 @@ class MistralFlashAttention2(MistralAttention):
                     softmax_scale=softmax_scale,
                     causal=True,
                 )
-            else:
-                attn_output_unpad = flash_attn_varlen_func(
+                if not use_sliding_windows
+                else flash_attn_varlen_func(
                     query_states,
                     key_states,
                     value_states,
@@ -746,27 +743,35 @@ class MistralFlashAttention2(MistralAttention):
                     dropout_p=dropout,
                     softmax_scale=softmax_scale,
                     causal=True,
-                    window_size=(self.config.sliding_window, self.config.sliding_window),
+                    window_size=(
+                        self.config.sliding_window,
+                        self.config.sliding_window,
+                    ),
                 )
-
-            attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
+            )
+            return pad_input(attn_output_unpad, indices_q, batch_size, query_length)
+        elif not use_sliding_windows:
+            return flash_attn_func(
+                query_states,
+                key_states,
+                value_states,
+                dropout,
+                softmax_scale=softmax_scale,
+                causal=True,
+            )
         else:
-            if not use_sliding_windows:
-                attn_output = flash_attn_func(
-                    query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True
-                )
-            else:
-                attn_output = flash_attn_func(
-                    query_states,
-                    key_states,
-                    value_states,
-                    dropout,
-                    softmax_scale=softmax_scale,
-                    causal=True,
-                    window_size=(self.config.sliding_window, self.config.sliding_window),
-                )
-
-        return attn_output
+            return flash_attn_func(
+                query_states,
+                key_states,
+                value_states,
+                dropout,
+                softmax_scale=softmax_scale,
+                causal=True,
+                window_size=(
+                    self.config.sliding_window,
+                    self.config.sliding_window,
+                ),
+            )
 
     def _upad_input(self, query_layer, key_layer, value_layer, padding_mask, query_length):
         batch_size, kv_seq_len, num_heads, head_dim = key_layer.shape
@@ -1441,15 +1446,12 @@ class MistralForSequenceClassification(MistralPreTrainedModel):
 
         if self.config.pad_token_id is None and batch_size != 1:
             raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
-        if self.config.pad_token_id is None:
-            sequence_lengths = -1
+        if self.config.pad_token_id is not None and input_ids is not None:
+            sequence_lengths = (torch.eq(input_ids, self.config.pad_token_id).long().argmax(-1) - 1).to(
+                logits.device
+            )
         else:
-            if input_ids is not None:
-                sequence_lengths = (torch.eq(input_ids, self.config.pad_token_id).long().argmax(-1) - 1).to(
-                    logits.device
-                )
-            else:
-                sequence_lengths = -1
+            sequence_lengths = -1
 
         pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
 
@@ -1459,7 +1461,7 @@ class MistralForSequenceClassification(MistralPreTrainedModel):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif self.num_labels > 1 and labels.dtype in [torch.long, torch.int]:
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"

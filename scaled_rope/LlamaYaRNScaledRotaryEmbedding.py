@@ -18,13 +18,10 @@ def linear_ramp_mask(min, max, dim):
         max += 0.001  # Prevent singularity
 
     linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
-    ramp_func = torch.clamp(linear_func, 0, 1)
-    return ramp_func
+    return torch.clamp(linear_func, 0, 1)
 
 def get_mscale(scale=1):
-    if scale <= 1:
-        return 1.0
-    return 0.1 * math.log(scale) + 1.0
+    return 1.0 if scale <= 1 else 0.1 * math.log(scale) + 1.0
 
 class LlamaYaRNScaledRotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, scale=1, original_max_position_embeddings=2048, extrapolation_factor=1, attn_factor=1, beta_fast=32, beta_slow=1, finetuned=False, device=None):

@@ -105,13 +105,10 @@ def _yarn_linear_ramp_mask(min, max, dim):
         max += 0.001  # Prevent singularity
 
     linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
-    ramp_func = torch.clamp(linear_func, 0, 1)
-    return ramp_func
+    return torch.clamp(linear_func, 0, 1)
 
 def _yarn_get_mscale(scale=1):
-    if scale <= 1:
-        return 1.0
-    return 0.1 * math.log(scale) + 1.0
+    return 1.0 if scale <= 1 else 0.1 * math.log(scale) + 1.0
 
 class FlashYaRNRotaryEmbedding(torch.nn.Module):
     """
@@ -194,45 +191,49 @@ class FlashYaRNRotaryEmbedding(torch.nn.Module):
         # Reset the tables if the sequence length has changed,
         # if we're on a new device (possibly due to tracing for instance),
         # or if we're switching from inference mode to training
-        if (seqlen > self._seq_len_cached or self._cos_cached.device != device
-            or self._cos_cached.dtype != dtype
-            or (self.training and self._cos_cached.is_inference())):
-            self._seq_len_cached = seqlen
+        if (
+            seqlen <= self._seq_len_cached
+            and self._cos_cached.device == device
+            and self._cos_cached.dtype == dtype
+            and (not self.training or not self._cos_cached.is_inference())
+        ):
+            return
+        self._seq_len_cached = seqlen
 
-            if self.dynamic:
-                scaling_factor = None
-                if seqlen <= self.max_position_embeddings:
-                    if self.finetuned:
-                        scaling_factor = self.scaling_factor
-                else:
-                    scaling_factor = seqlen / self.original_max_position_embeddings
-                if scaling_factor:
-                    self._compute_inv_freq(scaling_factor, device)
-                    self.mscale = float(_yarn_get_mscale(scaling_factor) * self.attn_factor)
-                else:
-                    self._compute_inv_freq_original(device)
-
-            # We want fp32 here, not self.inv_freq.dtype, since the model could be loaded in bf16
-            # And the output of arange can be quite large, so bf16 would lose a lot of precision.
-            # However, for compatibility reason, we add an option to use the dtype of self.inv_freq.
-            if self.pos_idx_in_fp32:
-                t = torch.arange(seqlen, device=device, dtype=torch.float32)
-                # We want fp32 here as well since inv_freq will be multiplied with t, and the output
-                # will be large. Having it in bf16 will lose a lot of precision and cause the
-                # cos & sin output to change significantly.
-                # We want to recompute self.inv_freq if it was not loaded in fp32
-                if self.inv_freq.dtype != torch.float32:
-                    inv_freq = self.inv_freq.to(torch.float32)
-                else:
-                    inv_freq = self.inv_freq
+        if self.dynamic:
+            scaling_factor = None
+            if seqlen <= self.max_position_embeddings:
+                if self.finetuned:
+                    scaling_factor = self.scaling_factor
             else:
-                t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
+                scaling_factor = seqlen / self.original_max_position_embeddings
+            if scaling_factor:
+                self._compute_inv_freq(scaling_factor, device)
+                self.mscale = float(_yarn_get_mscale(scaling_factor) * self.attn_factor)
+            else:
+                self._compute_inv_freq_original(device)
+
+        # We want fp32 here, not self.inv_freq.dtype, since the model could be loaded in bf16
+        # And the output of arange can be quite large, so bf16 would lose a lot of precision.
+        # However, for compatibility reason, we add an option to use the dtype of self.inv_freq.
+        if self.pos_idx_in_fp32:
+            t = torch.arange(seqlen, device=device, dtype=torch.float32)
+            # We want fp32 here as well since inv_freq will be multiplied with t, and the output
+            # will be large. Having it in bf16 will lose a lot of precision and cause the
+            # cos & sin output to change significantly.
+            # We want to recompute self.inv_freq if it was not loaded in fp32
+            if self.inv_freq.dtype != torch.float32:
+                inv_freq = self.inv_freq.to(torch.float32)
+            else:
                 inv_freq = self.inv_freq
-            # Don't do einsum, it converts fp32 to fp16 under AMP
-            # freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-            freqs = torch.outer(t, inv_freq)
-            self._cos_cached = (torch.cos(freqs) * self.mscale).to(dtype)
-            self._sin_cached = (torch.sin(freqs) * self.mscale).to(dtype)
+        else:
+            t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
+            inv_freq = self.inv_freq
+        # Don't do einsum, it converts fp32 to fp16 under AMP
+        # freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        freqs = torch.outer(t, inv_freq)
+        self._cos_cached = (torch.cos(freqs) * self.mscale).to(dtype)
+        self._sin_cached = (torch.sin(freqs) * self.mscale).to(dtype)
 
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, seqlen_offset: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -313,43 +314,47 @@ class FlashRotaryEmbedding(torch.nn.Module):
         # Reset the tables if the sequence length has changed,
         # if we're on a new device (possibly due to tracing for instance),
         # or if we're switching from inference mode to training
-        if (seqlen > self._seq_len_cached or self._cos_cached.device != device
-            or self._cos_cached.dtype != dtype
-            or (self.training and self._cos_cached.is_inference())):
-            self._seq_len_cached = seqlen
+        if (
+            seqlen <= self._seq_len_cached
+            and self._cos_cached.device == device
+            and self._cos_cached.dtype == dtype
+            and (not self.training or not self._cos_cached.is_inference())
+        ):
+            return
+        self._seq_len_cached = seqlen
             # We want fp32 here, not self.inv_freq.dtype, since the model could be loaded in bf16
             # And the output of arange can be quite large, so bf16 would lose a lot of precision.
             # However, for compatibility reason, we add an option to use the dtype of self.inv_freq.
-            if self.pos_idx_in_fp32:
-                t = torch.arange(seqlen, device=device, dtype=torch.float32)
-                t /= self.scaling_factor
+        if self.pos_idx_in_fp32:
+            t = torch.arange(seqlen, device=device, dtype=torch.float32)
                 # We want fp32 here as well since inv_freq will be multiplied with t, and the output
                 # will be large. Having it in bf16 will lose a lot of precision and cause the
                 # cos & sin output to change significantly.
                 # We want to recompute self.inv_freq if it was not loaded in fp32
-                if self.inv_freq.dtype != torch.float32:
-                    inv_freq = self.inv_freq.to(torch.float32)
-                else:
-                    inv_freq = self.inv_freq
-            else:
-                t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
-                t /= self.scaling_factor
-                inv_freq = self.inv_freq
-            # Don't do einsum, it converts fp32 to fp16 under AMP
-            # freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-            freqs = torch.outer(t, inv_freq)
-            if self.scale is None:
-                self._cos_cached = torch.cos(freqs).to(dtype)
-                self._sin_cached = torch.sin(freqs).to(dtype)
-            else:
-                power = ((torch.arange(seqlen, dtype=self.scale.dtype, device=self.scale.device)
-                          - seqlen // 2) / self.scale_base)
-                scale = self.scale.to(device=power.device) ** power.unsqueeze(-1)
-                # We want the multiplication by scale to happen in fp32
-                self._cos_cached = (torch.cos(freqs) * scale).to(dtype)
-                self._sin_cached = (torch.sin(freqs) * scale).to(dtype)
-                self._cos_k_cached = (torch.cos(freqs) / scale).to(dtype)
-                self._sin_k_cached = (torch.sin(freqs) / scale).to(dtype)
+            inv_freq = (
+                self.inv_freq.to(torch.float32)
+                if self.inv_freq.dtype != torch.float32
+                else self.inv_freq
+            )
+        else:
+            t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
+            inv_freq = self.inv_freq
+        t /= self.scaling_factor
+        # Don't do einsum, it converts fp32 to fp16 under AMP
+        # freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        freqs = torch.outer(t, inv_freq)
+        if self.scale is None:
+            self._cos_cached = torch.cos(freqs).to(dtype)
+            self._sin_cached = torch.sin(freqs).to(dtype)
+        else:
+            power = ((torch.arange(seqlen, dtype=self.scale.dtype, device=self.scale.device)
+                      - seqlen // 2) / self.scale_base)
+            scale = self.scale.to(device=power.device) ** power.unsqueeze(-1)
+            # We want the multiplication by scale to happen in fp32
+            self._cos_cached = (torch.cos(freqs) * scale).to(dtype)
+            self._sin_cached = (torch.sin(freqs) * scale).to(dtype)
+            self._cos_k_cached = (torch.cos(freqs) / scale).to(dtype)
+            self._sin_k_cached = (torch.sin(freqs) / scale).to(dtype)
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, seqlen_offset: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -452,7 +457,7 @@ class LlamaAttention(nn.Module):
         else:
             scaling_type = self.config.rope_scaling["type"]
             scaling_factor = self.config.rope_scaling["factor"]
-        if scaling_type == "yarn" or scaling_type == "dynamic-yarn":
+        if scaling_type in ["yarn", "dynamic-yarn"]:
             original_max_position_embeddings = self.config.rope_scaling["original_max_position_embeddings"]
 
             self.rotary_emb = FlashYaRNRotaryEmbedding(
@@ -461,7 +466,7 @@ class LlamaAttention(nn.Module):
                 original_max_position_embeddings=original_max_position_embeddings,
                 dynamic=scaling_type.startswith("dynamic"), finetuned=self.config.rope_scaling.get("finetuned", False)
             )
-        elif scaling_type == "linear" or scaling_type == "ntk":
+        elif scaling_type in ["linear", "ntk"]:
             self.rotary_emb = FlashRotaryEmbedding(
                 self.head_dim, base=self.rope_theta, interleaved=False, scaling_factor=scaling_factor,
             )
@@ -516,9 +521,9 @@ class LlamaAttention(nn.Module):
         q = q.view(bsz, q_len, self.num_heads, self.head_dim)
         k = k.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
         v = v.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-        
+
         q, k = self.rotary_emb(q, k, past_len)
-        
+
         kv = torch.stack([k, v], 2)
         kv = repeat_kv(kv, self.num_key_value_groups)
 
@@ -539,7 +544,7 @@ class LlamaAttention(nn.Module):
             # varlen, ignore padding tokens, efficient for large batch with many paddings
 
             assert attention_mask is not None
-            
+
             unpadded_kv, indices_k, cu_seqlens_k, max_seqlen_k = unpad_input(kv, attention_mask)
             unpadded_q, indices_q, cu_seqlens_q, max_seqlen_q = unpad_input(q, attention_mask[:, -q.size(1):])
             attn_outputs = flash_attn_varlen_kvpacked_func(
@@ -553,23 +558,24 @@ class LlamaAttention(nn.Module):
             attn_output = pad_input(
                 attn_output, indices_q, bsz, max_seqlen_q
             ).reshape(bsz, q_len, h_size)
-            attn_weights = attn_outputs[2] if output_attentions else None
-            
         else:
 
             # no padding tokens, more efficient
-            
+
             attn_outputs = flash_attn_kvpacked_func(
                 q, kv, dropout_p=0.0, softmax_scale=1.0/self.norm_factor, causal=(not has_layer_past), return_attn_probs=output_attentions)
 
             attn_output = attn_outputs[0] if output_attentions else attn_outputs
             attn_output = attn_output.reshape(bsz, q_len, h_size)
-            attn_weights = attn_outputs[2] if output_attentions else None
+        attn_weights = attn_outputs[2] if output_attentions else None
 
         if self.config.pretraining_tp > 1:
             attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
             o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
-            attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
+            attn_output = sum(
+                F.linear(attn_output[i], o_proj_slices[i])
+                for i in range(self.config.pretraining_tp)
+            )
         else:
             attn_output = self.o_proj(attn_output)
 
@@ -1138,13 +1144,10 @@ class LlamaForSequenceClassification(LlamaPreTrainedModel):
 
         if self.config.pad_token_id is None and batch_size != 1:
             raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
-        if self.config.pad_token_id is None:
-            sequence_lengths = -1
+        if self.config.pad_token_id is not None and input_ids is not None:
+            sequence_lengths = (torch.ne(input_ids, self.config.pad_token_id).sum(-1) - 1).to(logits.device)
         else:
-            if input_ids is not None:
-                sequence_lengths = (torch.ne(input_ids, self.config.pad_token_id).sum(-1) - 1).to(logits.device)
-            else:
-                sequence_lengths = -1
+            sequence_lengths = -1
 
         pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
 
@@ -1154,7 +1157,7 @@ class LlamaForSequenceClassification(LlamaPreTrainedModel):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif self.num_labels > 1 and labels.dtype in [torch.long, torch.int]:
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"

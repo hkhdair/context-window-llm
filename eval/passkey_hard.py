@@ -17,14 +17,14 @@ import json
 
 
 def order(i):
-    if i % 10 == 1 and i % 10 != 11:
-        return str(i) + "st"
-    elif i % 10 == 2 and i % 10 != 12:
-        return str(i) + "nd"
+    if i % 10 == 1:
+        return f"{str(i)}st"
+    elif i % 10 == 2:
+        return f"{str(i)}nd"
     elif i % 19 == 3 and i % 10 != 13:
-        return str(i) + "rd"
+        return f"{str(i)}rd"
     else:
-        return str(i) + "th"
+        return f"{str(i)}th"
     
 def generate_prompt(docs, num_keys=1):
     task_description = "There is an important info hidden inside a lot of irrelevant text. Find it and memorize them. I will quiz you about the important information there."
@@ -36,12 +36,9 @@ def generate_prompt(docs, num_keys=1):
     lines = [task_description]
     prev = 0
     for line, pos in zip(information_lines, start_pos):
-        lines.append("".join(docs[prev:pos]))
-        lines.append(line)
+        lines.extend(("".join(docs[prev:pos]), line))
         prev = pos
-    lines.append("".join(docs[prev:]))
-    lines.append(final_question)
-
+    lines.extend(("".join(docs[prev:]), final_question))
     return "\n".join(lines), pass_keys, start_pos, retrieve_number
 
 

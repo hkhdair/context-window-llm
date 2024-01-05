@@ -60,8 +60,9 @@ def main(args):
         print(f"Prompt is {tokens[0]} tokens")
     else:
         if args.tokens_step:
-            tokens = [x for x in range(
-                args.min_tokens, args.max_tokens + 1, args.tokens_step)]
+            tokens = list(
+                range(args.min_tokens, args.max_tokens + 1, args.tokens_step)
+            )
         else:
             tokens = [args.min_tokens]
             while args.min_tokens < args.max_tokens:
