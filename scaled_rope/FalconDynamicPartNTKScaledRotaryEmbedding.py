@@ -19,8 +19,7 @@ def linear_ramp_mask(min, max, dim):
         max += 0.001 #Prevent singularity
 
     linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
-    ramp_func = torch.clamp(linear_func, 0, 1)
-    return ramp_func
+    return torch.clamp(linear_func, 0, 1)
 
 def find_newbase_ntk(dim, base=10000, scale=1):
     return base * scale ** (dim / (dim-2))

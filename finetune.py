@@ -110,10 +110,11 @@ def main(args):
 
     if args.truncate:
         def truncate(sample):
-            sample["input_ids"] = sample["input_ids"][0:args.truncate]
-            sample["labels"] = sample["labels"][0:args.truncate]
-            sample["attention_mask"] = sample["attention_mask"][0:args.truncate]
+            sample["input_ids"] = sample["input_ids"][:args.truncate]
+            sample["labels"] = sample["labels"][:args.truncate]
+            sample["attention_mask"] = sample["attention_mask"][:args.truncate]
             return sample
+
         train_dataset = train_dataset.map(
             truncate, desc="Truncating", num_proc=args.num_proc)
 
@@ -231,7 +232,7 @@ def main(args):
             if completed_steps >= args.max_train_steps:
                 break
 
-        accelerator.print(f"Training Finished")
+        accelerator.print("Training Finished")
         accelerator.end_training()
 
     if args.output_dir is not None:
@@ -254,7 +255,7 @@ def main(args):
             state_dict=state_dict,
         )
 
-        accelerator.print(f"Saving Finished")
+        accelerator.print("Saving Finished")
 
 
 if __name__ == "__main__":

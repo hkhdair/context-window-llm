@@ -64,7 +64,7 @@ def forward_with_rerope(
         position_ids = torch.cat([past_key_value[2], position_ids], dim=1)
 
     past_key_value = (key_states, value_states, position_ids) if use_cache else None
-    
+
     if q_len == 1:
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         position_ids = (position_ids[:, -1] - position_ids).clip(max=self.window)
@@ -116,7 +116,10 @@ def forward_with_rerope(
     if self.pretraining_tp > 1:
         attn_output = attn_output.split(self.hidden_size // self.pretraining_tp, dim=2)
         o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.pretraining_tp, dim=1)
-        attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.pretraining_tp)])
+        attn_output = sum(
+            F.linear(attn_output[i], o_proj_slices[i])
+            for i in range(self.pretraining_tp)
+        )
     else:
         attn_output = self.o_proj(attn_output)
 

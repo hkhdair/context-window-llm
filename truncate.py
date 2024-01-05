@@ -4,10 +4,11 @@ from datasets import load_dataset
 def main(args):
     dataset = load_dataset(args.dataset, split="train")
     def truncate(sample):
-        sample["input_ids"] = sample["input_ids"][0:args.truncate]
-        sample["labels"] = sample["labels"][0:args.truncate]
-        sample["attention_mask"] = sample["attention_mask"][0:args.truncate]
+        sample["input_ids"] = sample["input_ids"][:args.truncate]
+        sample["labels"] = sample["labels"][:args.truncate]
+        sample["attention_mask"] = sample["attention_mask"][:args.truncate]
         return sample
+
     dataset = dataset.map(truncate, desc="Truncating", num_proc=args.num_proc)
     dataset.save_to_disk(args.output)
 

@@ -178,7 +178,9 @@ class LlamaConfig(PretrainedConfig):
             )
         if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
             raise ValueError(f"`rope_scaling`'s factor field must be an float > 1, got {rope_scaling_factor}")
-        if rope_scaling_type == "yarn" or rope_scaling_type == "dynamic-yarn":
+        if rope_scaling_type in ["yarn", "dynamic-yarn"]:
             original_max_position_embeddings = self.rope_scaling.get("original_max_position_embeddings", None)
             if original_max_position_embeddings is None or not isinstance(original_max_position_embeddings, int):
-                raise ValueError(f"`rope_scaling.original_max_position_embeddings` must be set to an int when using yarn, and dynamic-yarn")
+                raise ValueError(
+                    "`rope_scaling.original_max_position_embeddings` must be set to an int when using yarn, and dynamic-yarn"
+                )

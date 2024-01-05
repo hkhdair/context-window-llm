@@ -34,8 +34,8 @@ def compute_perplexity(
     attn_masks = encodings["attention_mask"]
 
     if max_length and truncate:
-        encoded_texts = [x[0:max_tokenized_len] for x in encoded_texts]
-        attn_masks = [x[0:max_tokenized_len] for x in attn_masks]
+        encoded_texts = [x[:max_tokenized_len] for x in encoded_texts]
+        attn_masks = [x[:max_tokenized_len] for x in attn_masks]
         sliding_window = max_tokenized_len
 
     pbar = tqdm(total=len(encoded_texts), disable=hide_progress)
@@ -64,7 +64,7 @@ def compute_perplexity(
             with torch.no_grad():
                 outputs = model(input_ids, labels=target_ids)
                 neg_log_likelihood = outputs.loss
-            
+
             if aggressive_memory:
                 outputs = None
                 input_ids = None
@@ -130,8 +130,9 @@ def main(args):
         input_texts = input_texts[:args.samples]
 
     if args.tokens_step:
-        tokens = [x for x in range(
-            args.min_tokens, args.max_tokens + 1, args.tokens_step)]
+        tokens = list(
+            range(args.min_tokens, args.max_tokens + 1, args.tokens_step)
+        )
     else:
         tokens = [args.min_tokens]
         while args.min_tokens < args.max_tokens:

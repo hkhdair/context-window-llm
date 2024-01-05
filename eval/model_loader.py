@@ -29,10 +29,7 @@ def load_model(model, args):
         config.max_position_embeddings = args.max_position_embeddings
     if args.factor:
         config.rope_scaling["factor"] = args.factor
-    if args.no_use_cache:
-        config.use_cache = False
-    else:
-        config.use_cache = True
+    config.use_cache = not args.no_use_cache
     if args.sliding_window_attention:
         config.sliding_window = args.sliding_window_attention
     if args.custom_model or args.custom_model_together or args.custom_model_mistral:
@@ -64,12 +61,11 @@ def load_model(model, args):
                 "original_max_position_embeddings": args.original_max_position_embeddings if args.original_max_position_embeddings else config.rope_scaling["original_max_position_embeddings"],
                 "finetuned": args.finetuned if args.finetuned else (config.rope_scaling.get("finetuned", False) if config.rope_scaling is not None else False)
             }
-    else:
-        if args.rerope:
-            assert not args.custom_model and not args.custom_model_together
-            from transformers.models.llama.modeling_llama import LlamaAttention
-            from scaled_rope.LlamaReRoPE import forward_with_rerope
-            LlamaAttention.forward = forward_with_rerope
+    elif args.rerope:
+        assert not args.custom_model and not args.custom_model_together
+        from transformers.models.llama.modeling_llama import LlamaAttention
+        from scaled_rope.LlamaReRoPE import forward_with_rerope
+        LlamaAttention.forward = forward_with_rerope
 
     if args.load_in_8bit or args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -87,7 +83,7 @@ def load_model(model, args):
         quantization_config = None
         torch_dtype = torch.bfloat16
 
-    loaded = model_cls.from_pretrained(
+    return model_cls.from_pretrained(
         model,
         torch_dtype=torch_dtype,
         device_map="auto",
@@ -96,8 +92,6 @@ def load_model(model, args):
         quantization_config=quantization_config,
         use_flash_attention_2=args.flash_attention,
     )
-
-    return loaded
 
 
 def add_args(parser: ArgumentParser):
@@ -194,15 +188,14 @@ def apply_patches(model, args):
                 raise RuntimeError(
                     f"Unsupported architecture {model.config.architectures} for YaRN")
         elif args.rerope:
-            if "LlamaForCausalLM" in model.config.architectures:
-                training_length = args.original_max_position_embeddings if args.original_max_position_embeddings else 4096
-                window = args.rerope
-                patch_llama_for_rerope(
-                    model, training_length=training_length, window=window)
-            else:
+            if "LlamaForCausalLM" not in model.config.architectures:
                 raise RuntimeError(
                     f"Unsupported architecture {model.config.architectures} for YaRN")
 
+            training_length = args.original_max_position_embeddings if args.original_max_position_embeddings else 4096
+            window = args.rerope
+            patch_llama_for_rerope(
+                model, training_length=training_length, window=window)
     if args.adapter:
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, args.adapter)
